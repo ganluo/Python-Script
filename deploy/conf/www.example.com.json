@@ -1,0 +1,8 @@
+{
+    "source": "/data/www/www.example.com",
+    "remote": ["deploy@192.168.2.6::xyepd", "deploy@128.199.124.180::xyepd"],
+    "password_file": "/root/python-scripts/deploy/.rsync_pass",
+    "exclude_file": "www.example.com.exclude",
+    "file_list": "www.example.com.list",
+    "log_file": "www.example.com.log"
+}

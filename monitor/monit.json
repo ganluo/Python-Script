@@ -1,0 +1,16 @@
+{
+    "phones": [
+        "12345678900", 
+    ], 
+    "mail_addrs": [
+        "xx@xx.com"
+    ], 
+    "targets": [
+        {
+            "host": "192.168.3.17", 
+            "health": true, 
+            "port": "10051", 
+            "timeout": 6
+        } 
+    ]
+}

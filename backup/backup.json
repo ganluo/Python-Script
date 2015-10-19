@@ -1,0 +1,14 @@
+{
+    "remote": "rsyncuser@192.168.3.21::conf_backup",
+    "rsync_pass": "123456",
+    "tmpdir": "/tmp/conf",
+    "record_file": "/tmp/record.json",
+    "log_file": "/tmp/backup.log",
+    "exclude": 
+        [".log", ".json", ".tar", ".gz", ".bz2", ".zip", ".xz", "tgz", "tbz2"],
+    "files": ["/root/python-scripts/backup.py",
+        "/root/python-scripts/backup.json",
+        "/tmp/a.txt",
+        "/var/spool/cron/root"
+        ]
+}

@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+#coding=utf-8
+# author: ganluo
+# :set  tabstop=4
+# :set shiftwidth=4
+# :set expandtab
+
+import os.path
+import subprocess
+import argparse
+import logging
+from datetime import datetime
+import json
+from tempfile import TemporaryFile
+from fnmatch import fnmatch
+
+
+basedir = os.path.dirname(os.path.abspath(__file__))
+timestamp = datetime.today().strftime('%Y%m%d%H%M%S')
+backup_dir = r'/data/backup'
+log_dir = os.path.join(basedir, 'log')
+config_dir = os.path.join(basedir, 'conf')
+file_list_dir = os.path.join(basedir, 'list')
+exclude_file_dir = os.path.join(basedir, 'exclude')
+
+class Deployment(object):
+
+    def __init__(self):
+        self.config = {}
+        self.update_list = []
+        self.backup_list  = []
+        self.update_cmds = []
+        self.parser = argparse.ArgumentParser()
+        group = self.parser.add_mutually_exclusive_group()
+        group.add_argument('-a', '--all', action='store_true', 
+            help='sync the whole site instead individual files')
+        group.add_argument('-n', '--dry-run', dest='dry_run', action='store_true', 
+            help='dry-run')
+        group.add_argument('-r', '--revert', dest='revert', 
+            help='revert change to special version')
+        group.add_argument('-l', '--list', dest='show', action='store_true',
+            help='list backup version (for revert)')
+        self.parser.add_argument('site', help='specify the website to sync',
+            metavar='site_name')
+
+    def configure(self):
+        with open(self.config_file, 'r') as f:
+            self.config = json.load(f)
+        self.file_list = os.path.join(file_list_dir, self.config['file_list'])
+        self.log_file = os.path.join(log_dir, self.config['log_file'])
+        self.exclude_file = os.path.join(exclude_file_dir, self.config['exclude_file'])
+        self.source = self.config['source'] + '/'
+
+    def logging(self):
+        self.logger = logging.getLogger('deploy')
+        fileHandler = logging.FileHandler(self.log_file)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messa'
+            'ge)s', '%Y-%m-%d %H:%M:%S')
+        fileHandler.setFormatter(formatter)
+        consoleHandler = logging.StreamHandler()
+        consoleHandler.setFormatter(formatter)
+        self.logger.addHandler(fileHandler)
+        self.logger.addHandler(consoleHandler)
+        self.logger.setLevel(logging.INFO)
+
+    def all_update(self):
+        for remote in self.config['remote']:
+            cmd = ['rsync', '-a', '-v', '--delete', '--progress',
+                '--password-file=' + self.config['password_file'],
+                '--exclude-from=' + self.exclude_file,
+                self.source,
+                remote]
+            self.logger.info('sync {0} to {1}'.format(self.source, remote.split('@', 1)[1]))
+            subprocess.check_call(cmd)
+        
+    def _check_filelist(self):
+        with open(self.file_list, 'r+') as f:
+            for line in f:
+                file = line.strip()
+                src_file = os.path.join(self.source, file)
+                if not os.path.isfile(src_file):
+                    print('{} does not exists or is not a file'.format(src_file))
+                    continue
+                self.update_list.append(file)
+            f.seek(0)
+            f.truncate(0)
+
+        self.backup_list = self.update_list
+
+    def update(self):
+        for remote in self.config['remote']:
+            for file in self.update_list:
+                src_file = os.path.join(self.source, file)
+                dst_file = os.path.join(remote, file)
+                cmd = ['rsync','ztopg', '--password-file=' + self.config['password_file'],
+                    src_file,
+                    dst_file ]
+                self.logger.info('sync {0} to {1}'.format(src_file, remote.split('@', 1)[1]))
+                subprocess.check_call(cmd)
+
+    def dry_run(self):
+        remote = self.config['remote'][0]
+        self.dry_run_cmd =  ['rsync', '--dry-run', '-a', '-v',
+            '--password-file=' + self.config['password_file'],
+            '--exclude-from=' + self.exclude_file,
+            self.source,
+            remote]
+
+    def show_backup(self, site):
+        backup_list = os.listdir(os.path.join(backup_dir, site))
+        print('\n'.join(sorted(backup_list)))
+
+    def backup(self):
+        for file in self.backup_list:
+            src_file = os.path.join(self.config['remote'][0], file)
+            dst_file = os.path.join(self.backup_prefix, file)
+            dst_dir = os.path.dirname(dst_file)
+            if not os.path.isdir(dst_dir):
+                os.makedirs(dst_dir)
+            cmd = ['rsync','-ztopg', '--password-file=' + self.config['password_file'], src_file, dst_file]
+            p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, universal_newlines=True)
+            stderr = p.communicate()[1]
+            if stderr != '' and  not fnmatch(stderr, '*No*such*file*or*directory*'):
+            # 在新增文件时，远程主机上不存在该文件，备份命令会失败，忽略此种错误
+                raise SystemExit('{error}: {cmd}'.format(stderr, p.args))
+            self.logger.info('backup {0} to {1}'.format(src_file.split('@', 1)[1], self.backup_prefix))
+
+    def revert(self, site, version):
+        src_dir = os.path.join(backup_dir, site, version)
+        if os.path.isdir(src_dir):
+            source = src_dir + '/'
+            for remote in self.config['remote']:
+                # cmd 中切勿加 --delete 选项，否则在回退时会导致大量文件被错误删除,这也是不在此直接调用 all_update()
+                # 方法，而重复贴代码的原因, 怕以后会在 all_update() 的 cmd 中添加了 --delete 选项
+                cmd = ['rsync', '-a', '-v', '--progress',
+                    '--password-file=' + self.config['password_file'],
+                    '--exclude-from=' + self.exclude_file,
+                    source,
+                    remote]
+                self.logger.info('revert version {0} to {1}'.format(version, remote.split('@', 1)[1]))
+                subprocess.check_call(cmd)
+        else:
+            raise SystemExit(
+                '{0} is not a directory or does not exists'.format(src_dir))
+
+    def get_backup_list(self, all=False):
+        if all:
+            self.dry_run()
+            with TemporaryFile('w+t') as f:
+                p1 = subprocess.Popen(self.dry_run_cmd, stdout=subprocess.PIPE, universal_newlines=True)
+                #output = p1.communicate()[0]
+                #print(output)
+                p2 = subprocess.check_call("egrep -v '^receiving|^./|^send|^sent|^total|^$'", shell=True,
+                                      stdin=p1.stdout, stdout=f)
+                f.seek(0)
+                for line in f:
+                    print(line)
+                    file = line.strip()
+                    if file.endswith('/') or '' == file:
+                        continue
+                    self.backup_list.append(file)
+        else:
+        # 如果是部分文件更新，生成 self.backup_list 的同时会生成 self.update_list, 因为获取备份总是在更新之前，
+        # 所以不用担心在执行 self.update() 之前没有 self.update_list
+            self._check_filelist()
+
+    def run(self):
+        args = self.parser.parse_args()
+        self.backup_prefix = os.path.join(backup_dir, args.site, timestamp)
+        self.config_file = os.path.join(config_dir, args.site + '.json')
+        self.configure()
+        self.logging()
+
+        if args.dry_run:
+            self.dry_run()
+            subprocess.check_call(self.dry_run_cmd)
+        elif args.revert:
+                self.revert(args.site, args.revert)
+        elif args.show:
+            self.show_backup(args.site)
+        else:
+            self.get_backup_list(args.all)
+            self.backup()
+            if args.all:
+                pass
+                #self.all_update()
+            else:
+                self.update()
+
+
+if __name__ == '__main__':
+    deployment = Deployment()
+    deployment.run()
+
+
+# 考虑下列表中有目录的情况
